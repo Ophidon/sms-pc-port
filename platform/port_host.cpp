@@ -128,4 +128,13 @@ void port_sleep_until(const struct timespec* deadline)
 	while (ns_until(deadline) > 0)
 		YieldProcessor();
 }
+
+// For a thread that wakes on a deadline (the retrace timer): at normal priority,
+// with every core busy (a slower CPU compiling shaders), its wake-up waited for
+// a core for up to 30 ms; at THREAD_PRIORITY_HIGHEST, at most 0.6 ms. It runs
+// for microseconds per wake-up, so it takes nothing from the game's threads.
+void port_timer_thread_priority(void)
+{
+	SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+}
 #endif
