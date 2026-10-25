@@ -14,6 +14,9 @@ void port_timer_thread_priority(void);
 // 1 on, 0 off (the default). Elsewhere sleeps are always precise.
 int port_precise_timer(void);
 void port_set_precise_timer(int on);
+// Always Windows' own Sleep(), whatever port_precise_timer says: for when frame
+// times need not be steady (fast-forward), so the spin costs nothing there.
+void port_sleep_until_coarse(const struct timespec* deadline);
 #else
 #include <unistd.h>
 #include <stdlib.h>
@@ -60,6 +63,7 @@ static inline void port_sleep_until(const struct timespec* deadline)
 #endif
 }
 static inline void port_timer_thread_priority(void) {}
+static inline void port_sleep_until_coarse(const struct timespec* deadline) { port_sleep_until(deadline); }
 static inline int port_precise_timer(void) { return 0; }
 static inline void port_set_precise_timer(int on) { (void)on; }
 #endif

@@ -40,7 +40,8 @@ int port_mkdir(const char* path, int)
 // Precise frame timing (precise_timer = on, SMS_PRECISE_TIMER=1, or the settings
 // menu) sleeps to a little before the deadline and spins the rest, which costs
 // a little CPU (about 3.6% of a core at 120 fps) for frames within a fraction
-// of a millisecond of their time:
+// of a millisecond of their time (but not while fast-forwarding: platform/vi
+// calls port_sleep_until_coarse then):
 //  - on a high-resolution waitable timer (Windows 10 1803 and later), which
 //    wakes within about half a millisecond of when it is set for;
 //  - else (older Windows, Wine without it) with Sleep() for the whole
@@ -115,15 +116,22 @@ void ask_1ms_resolution()
 int port_precise_timer(void) { return s_precise.load(); }
 void port_set_precise_timer(int on) { s_precise.store(on != 0); }
 
+void port_sleep_until_coarse(const struct timespec* deadline)
+{
+	const long long ns = ns_until(deadline);
+	if (ns > 0)
+		Sleep((DWORD)((ns + 999999LL) / 1000000LL));
+}
+
 void port_sleep_until(const struct timespec* deadline)
 {
+	if (!s_precise.load()) {
+		port_sleep_until_coarse(deadline);
+		return;
+	}
 	const long long ns = ns_until(deadline);
 	if (ns <= 0)
 		return;
-	if (!s_precise.load()) {
-		Sleep((DWORD)((ns + 999999LL) / 1000000LL));
-		return;
-	}
 	if (ns <= kTimerEarlyNs || !timer_sleep(ns - kTimerEarlyNs)) {
 		const long long left = ns_until(deadline);
 		if (left > kSleepEarlyNs) {
