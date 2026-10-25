@@ -10,6 +10,10 @@ int port_setenv(const char* name, const char* value, int overwrite);
 int port_mkdir(const char* path, int mode);
 void port_sleep_until(const struct timespec* deadline);
 void port_timer_thread_priority(void);
+// Precise frame timing for port_sleep_until (precise_timer, the settings menu):
+// 1 on, 0 off (the default). Elsewhere sleeps are always precise.
+int port_precise_timer(void);
+void port_set_precise_timer(int on);
 #else
 #include <unistd.h>
 #include <stdlib.h>
@@ -56,6 +60,8 @@ static inline void port_sleep_until(const struct timespec* deadline)
 #endif
 }
 static inline void port_timer_thread_priority(void) {}
+static inline int port_precise_timer(void) { return 0; }
+static inline void port_set_precise_timer(int on) { (void)on; }
 #endif
 
 #endif

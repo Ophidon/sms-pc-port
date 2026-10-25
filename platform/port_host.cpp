@@ -1,9 +1,9 @@
 #ifdef _WIN32
 #include "port_host.h"
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
 #include <cstdio>
-#include <cstring>
 #include <io.h>
 #include <direct.h>
 #include <mutex>
@@ -32,15 +32,20 @@ int port_mkdir(const char* path, int)
 	return _mkdir(path);
 }
 
-// port_sleep_until: Sleep() alone wakes on the system timer's tick and, with
-// the time rounded up to whole milliseconds, 0-2.5 ms past the deadline, which
-// at 120 fps put the retraces (platform/vi) visibly off their 8.3 ms. Instead
-// the thread sleeps to a little before the deadline and spins the rest:
+// port_sleep_until: by default, Sleep() of the time left rounded up to whole
+// milliseconds. That wakes on the system timer's tick, 0-2.5 ms past the
+// deadline, so at 120 fps the retraces (platform/vi), and the frames with them,
+// come 6-11 ms apart around their 8.3 ms.
+//
+// Precise frame timing (precise_timer = on, SMS_PRECISE_TIMER=1, or the settings
+// menu) sleeps to a little before the deadline and spins the rest, which costs
+// a little CPU (about 3.6% of a core at 120 fps) for frames within a fraction
+// of a millisecond of their time:
 //  - on a high-resolution waitable timer (Windows 10 1803 and later), which
 //    wakes within about half a millisecond of when it is set for;
-//  - else (older Windows, Wine without it, or SMS_HOST_TIMER=legacy) with
-//    Sleep() for the whole milliseconds that fit, at 1 ms timer resolution
-//    (timeBeginPeriod, which SDL asks for too).
+//  - else (older Windows, Wine without it) with Sleep() for the whole
+//    milliseconds that fit, at 1 ms timer resolution (timeBeginPeriod, which
+//    SDL asks for too).
 // Both are looked up when first needed, so nothing is needed at load time.
 // Each thread has its own timer: a timer set again by another thread would
 // move this one's wake-up.
@@ -66,14 +71,8 @@ long long ns_until(const struct timespec* deadline)
 	return (long long)(deadline->tv_sec - now.tv_sec) * 1000000000LL + (deadline->tv_nsec - now.tv_nsec);
 }
 
-bool legacy_asked()
-{
-	static const bool legacy = [] {
-		const char* e = getenv("SMS_HOST_TIMER");
-		return e && !strcmp(e, "legacy");
-	}();
-	return legacy;
-}
+// Read by the timer threads at every sleep, written by the settings menu.
+std::atomic<int> s_precise(0);
 
 thread_local bool t_timer_tried;
 thread_local HANDLE t_timer; // this thread's high-resolution timer, or null
@@ -83,8 +82,8 @@ bool timer_sleep(long long ns)
 {
 	if (!t_timer_tried) {
 		t_timer_tried = true;
-		CreateWaitableTimerExWFn create = legacy_asked() ? NULL
-		    : (CreateWaitableTimerExWFn)(void*)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "CreateWaitableTimerExW");
+		CreateWaitableTimerExWFn create = (CreateWaitableTimerExWFn)(void*)GetProcAddress(
+		    GetModuleHandleW(L"kernel32.dll"), "CreateWaitableTimerExW");
 		if (create)
 			t_timer = create(NULL, NULL, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
 	}
@@ -113,11 +112,18 @@ void ask_1ms_resolution()
 
 } // namespace
 
+int port_precise_timer(void) { return s_precise.load(); }
+void port_set_precise_timer(int on) { s_precise.store(on != 0); }
+
 void port_sleep_until(const struct timespec* deadline)
 {
 	const long long ns = ns_until(deadline);
 	if (ns <= 0)
 		return;
+	if (!s_precise.load()) {
+		Sleep((DWORD)((ns + 999999LL) / 1000000LL));
+		return;
+	}
 	if (ns <= kTimerEarlyNs || !timer_sleep(ns - kTimerEarlyNs)) {
 		const long long left = ns_until(deadline);
 		if (left > kSleepEarlyNs) {
