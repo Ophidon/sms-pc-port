@@ -94,6 +94,12 @@ uint32_t s_frame = 0;
 // (src/vk), on Vulkan; when Vulkan cannot start, OpenGL as usual.
 int s_wantVulkan = -1;  // -1: from the environment
 bool s_vulkan = false;  // the backend in use is Vulkan
+// Why the Vulkan asked for is not what draws ("" while it is, or OpenGL was
+// asked for). OpenGL can be much slower on the same computer (a laptop's GPU
+// on Windows), and players only see that the game got slower, so besides the
+// log it is a notice in the window for a while (showVulkanNotice) and a line in
+// the debug overlay (gx::vulkanMissing).
+std::string s_vulkanMissing;
 bool wantVulkan() {
     if (s_wantVulkan < 0) {
         const char* e = getenv("SMS_GX_BACKEND");
@@ -106,6 +112,7 @@ bool wantVulkan() {
     if (s_wantVulkan == 1 && !told) {
         told = true;
         gx::logmsg("Vulkan was asked for, but this build has no Vulkan backend; OpenGL instead");
+        s_vulkanMissing = "this build has no Vulkan backend";
     }
     return false;
 #endif
@@ -508,6 +515,27 @@ static float fsrScale(float scale, float outW, float outH) {
     return s;
 }
 
+// The notice for s_vulkanMissing, at the top of the window for its first
+// kVulkanNoticeSeconds (expireVulkanNotice takes it down), unless something else's notice
+// (multiplayer's) has replaced it by then. The overlay's font is ASCII only.
+const double kVulkanNoticeSeconds = 20.0;
+double s_vulkanNoticeUntil = 0;
+std::string s_vulkanNotice;
+void showVulkanNotice() {
+    if (s_vulkanMissing.empty() || !s_vulkanNotice.empty()) return;
+    s_vulkanNotice = s_vulkanMissing == "this build has no Vulkan backend"
+        ? "Vulkan isn't built into this game, so it is drawing with OpenGL, which can be much slower.\n"
+          "Build the game again for Vulkan: in SMS Launcher, Settings > Manage game > Rebuild game."
+        : "The game is drawing with OpenGL, which can be slower than the Vulkan you chose.\n" + s_vulkanMissing.substr(0, 160);
+    GXPC_ExtOverlaySet(GXPC_EXT_OVERLAY_NOTICE, s_vulkanNotice.c_str());
+    s_vulkanNoticeUntil = nowSeconds() + kVulkanNoticeSeconds;
+}
+void expireVulkanNotice() {
+    if (s_vulkanNoticeUntil == 0 || nowSeconds() < s_vulkanNoticeUntil) return;
+    s_vulkanNoticeUntil = 0;
+    gx::extOverlayClearIf(GXPC_EXT_OVERLAY_NOTICE, s_vulkanNotice);
+}
+
 bool openWindow(float scale, bool vulkan) {
 #ifdef SDL_HINT_WINDOWS_DPI_SCALING
     SDL_SetHint(SDL_HINT_WINDOWS_DPI_SCALING, "1");
@@ -734,6 +762,7 @@ bool openWindow(float scale, bool vulkan) {
         logmsg("window %dx%d centered on display %d (%s), internal resolution scale %g, %s ready",
                layout.w, layout.h, display, s_videoDriver, scale, vulkan ? "Vulkan device" : "OpenGL context");
     s_windowFailure = WF_NONE;
+    if (!vulkan) showVulkanNotice();
     s_mouseCamera = !getenv("SMS_MOUSE_CAMERA") || !*getenv("SMS_MOUSE_CAMERA") || envTrue("SMS_MOUSE_CAMERA");
     s_rawMouse = !getenv("SMS_MOUSE_RAW") || !*getenv("SMS_MOUSE_RAW") || envTrue("SMS_MOUSE_RAW");
     if (!s_rawMouse)
@@ -799,6 +828,7 @@ bool openWindowAnyBackend(float scale) {
         if (openWindow(scale, true)) return true;
         if (s_windowFailure != WF_WINDOW) return false;
         logmsg("Vulkan could not start (%s); OpenGL instead", s_windowError);
+        s_vulkanMissing = std::string("Vulkan could not start: ") + s_windowError;
     }
     if (openWindow(scale, false)) return true;
 #if !defined(_WIN32) && !defined(__APPLE__)
@@ -927,6 +957,8 @@ void onDisplayCopy(const void* xfb) {
 }  // namespace
 
 namespace gx {
+const char* vulkanMissing() { return s_vulkanMissing.c_str(); }
+
 // GXPC_Shutdown: the GL thread ends and the context is current on the
 // calling thread again, so the caller may destroy it.
 void releaseGlThread() {
@@ -1258,6 +1290,7 @@ int GXPC_InitAuto(float efbScale) {
             return 1;
         }
         logmsg("headless: Vulkan could not start; OpenGL instead");
+        s_vulkanMissing = "Vulkan could not start";
     }
 #endif
 #ifdef SMS_GX_HAVE_EGL
@@ -1374,6 +1407,25 @@ static bool modKeyEvent(const SDL_Event& ev) {
 
 extern "C" void GXPC_NoteInputDevice(int controller, int sdlType, const char* name);
 
+// The controllers connected, pressed yet or not (split-screen co-op's hint, platform/pad).
+extern "C" int GXPC_ControllerCount(void) { return int(s_pads.size()); }
+
+// A multiplayer guest (SMS_MULTIPLAYER=join): the warp and cheat menus are the
+// host's, as the stage and the game's rules are (a guest's warp left the others).
+static bool multiplayerGuest() {
+    static const bool guest = [] {
+        const char* e = getenv("SMS_MULTIPLAYER");
+        return e && !strcmp(e, "join");
+    }();
+    return guest;
+}
+static void guestMenuRefused(const char* menu) {
+    static bool told[2];
+    bool& t = told[menu[0] == 'c'];
+    if (!t) logmsg("multiplayer: the %s menu is the host's; not opening it in a joined game", menu);
+    t = true;
+}
+
 // Tell the button prompts which device the player last used: a key, mouse
 // click or mouse movement means keyboard and mouse; a button or a stick pushed
 // well off centre means that controller.
@@ -1398,6 +1450,7 @@ void sms_gx_pump_events(void) {
 #ifdef SMS_GX_HAVE_SDL2
     if (s_mode != MODE_WINDOW) return;
     applyWindowRequests();
+    expireVulkanNotice();
     // Controllers are read over SDL's joystick lock, which the rumble thread
     // holds through a send: during one, only the events already queued are
     // handled, and the rest wait for the next frame instead of the game.
@@ -1415,6 +1468,8 @@ void sms_gx_pump_events(void) {
                     const char* name = SDL_GameControllerName(c);
                     s_pads.push_back({c, SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(c)),
                                       int(SDL_GameControllerGetType(c)), name ? name : ""});
+                    // in the log, so one controller seen twice (a remapper's beside it) shows
+                    logmsg("controller %d connected: %s", int(s_pads.back().id), name ? name : "(no name)");
                     if (s_rumblePad < 0) s_rumblePad = s_pads.back().id;
                 }
             }
@@ -1450,7 +1505,9 @@ void sms_gx_pump_events(void) {
         }
         // F9 opens and closes the cheat menu and is kept from the pad layer
         if ((ev.type == SDL_KEYDOWN || ev.type == SDL_KEYUP) && ev.key.keysym.scancode == SDL_SCANCODE_F9) {
-            if (ev.type == SDL_KEYDOWN && !ev.key.repeat) {
+            if (ev.type == SDL_KEYDOWN && !ev.key.repeat && multiplayerGuest() && !cheatMenuVisible()) {
+                guestMenuRefused("cheat");
+            } else if (ev.type == SDL_KEYDOWN && !ev.key.repeat) {
                 if (warpMenuVisible()) warpMenuToggle();
                 cheatMenuToggle();
                 syncMenuInput();
@@ -1468,7 +1525,9 @@ void sms_gx_pump_events(void) {
             bool& held = s_warpToggleHeld[warpButton];
             const bool down = ev.type == SDL_KEYDOWN || ev.type == SDL_CONTROLLERBUTTONDOWN;
             const bool repeat = warpKey && ev.key.repeat;
-            if (down && !repeat && (warpMenuVisible() || GXPC_OverlayVisible())) {
+            if (down && !repeat && !warpMenuVisible() && GXPC_OverlayVisible() && multiplayerGuest()) {
+                guestMenuRefused("warp");
+            } else if (down && !repeat && (warpMenuVisible() || GXPC_OverlayVisible())) {
                 if (cheatMenuVisible()) cheatMenuToggle();
                 warpMenuToggle();
                 syncMenuInput();

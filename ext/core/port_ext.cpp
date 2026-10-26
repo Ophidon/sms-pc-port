@@ -123,6 +123,19 @@ extern "C" int port_ext_hide_player_model(void* mario)
 	return 0;
 }
 
+extern "C" unsigned port_ext_hidden_player_parts(void* mario)
+{
+	unsigned parts = 0;
+	EACH(hiddenPlayerParts) parts |= s_ext[i]->hiddenPlayerParts(mario);
+	return parts;
+}
+
+extern "C" int port_ext_player_aim(void* mario, short* yaw, short* tilt)
+{
+	EACH(playerAim) if (s_ext[i]->playerAim(mario, yaw, tilt)) return 1;
+	return 0;
+}
+
 extern "C" void port_ext_pad_read(void* status)
 {
 	EACH(padRead) s_ext[i]->padRead(status);
@@ -364,6 +377,17 @@ extern "C" void port_ext_map_event(void* event)
 extern "C" int port_ext_object_stomp(void* object, void* mario)
 {
 	EACH(objectStomp) if (s_ext[i]->objectStomp(object, mario)) return 1;
+	return 0;
+}
+
+extern "C" void port_ext_scene_loaded(void)
+{
+	EACH(sceneLoaded) s_ext[i]->sceneLoaded();
+}
+
+extern "C" int port_ext_draw_stage(void* director, void* graphics)
+{
+	EACH(drawStage) if (s_ext[i]->drawStage(director, graphics)) return 1;
 	return 0;
 }
 

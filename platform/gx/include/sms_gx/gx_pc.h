@@ -83,6 +83,11 @@ void GXPC_SetWidescreen(float widthOver43);
 /* With widescreen, draw the following 2D stretched across the whole frame
  * (the game's faders call it around their drawing); 0 goes back. */
 void GXPC_SetStretch2D(int on);
+// Split-screen co-op (ext/coop): while on, everything drawn lands in the part
+// of the frame at x, y (its left and top edges) sized w, h, all as shares of
+// the frame's width and height, as if that part were the whole frame:
+// viewports, scissors, EFB copies and their clears, and peeks.
+void GXPC_SetSplitView(int on, float x, float y, float w, float h);
 /* With widescreen, draw the following 2D at the 4:3 frame's scale, centred,
  * and past its edges: the game laid it out across the whole frame (the map
  * screen calls it around its drawing); 0 goes back. */
@@ -316,7 +321,16 @@ const char* GXPC_KeyName(int scancode);
 // own, such as multiplayer's players, each in their own colours. Any thread:
 // the picture is copied, and uploaded the next time the texture is drawn.
 void GXPC_SetTextureOverride(const void* data, size_t bytes, const uint8_t* rgba, int w, int h);
-// Drops every such picture (a stage's memory is let go).
+// The texture whose data is at `data` drawn as it is (a texture pack's picture
+// for it too), never Mario's look (SMS_MARIO_LOOK), whose pictures would find
+// a copy of Mario's textures by their data as well: another player's, with no
+// picture of theirs. Dropped as a picture is (GXPC_SetTextureOverride with
+// NULL `rgba`, or the data changing).
+void GXPC_SetTexturePlain(const void* data, size_t bytes);
+// Whether the texture at `data` is still drawn plain (GXPC_SetTexturePlain): not
+// since dropped, or its data changed.
+int GXPC_TextureIsPlain(const void* data, size_t bytes);
+// Drops every such picture, and every plain texture (a stage's memory is let go).
 void GXPC_ClearTextureOverrides(void);
 
 /* Statistics for the current frame (reset by GXCopyDisp). */
